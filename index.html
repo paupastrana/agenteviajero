@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TSP: Algoritmo Genético</title>
+    <link rel="stylesheet" href="principal.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;800&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div id="app" class="container">
+        <h1 class="main-title">Agente Viajero</h1>
+        <p class="subtitle">Algoritmos Genéticos.</p>
+
+        <div class="layout-grid">
+            <!-- Sección del mapa -->
+            <div class="card map-section">
+                <h2 class="card-title">
+                    Mapa de Ciudades (<span id="city-count">0</span> Ciudades Destino)
+                </h2>
+
+                <div class="canvas-wrapper">
+                    <canvas id="tspCanvas"></canvas>
+                    <div id="click-overlay">
+                        <p>Clic para añadir ciudades de destino</p>
+                    </div>
+                </div>
+
+                <button id="reset-button" class="btn">
+                    Resetear Ciudades
+                </button>
+            </div>
+
+        
+            <div>
+                <!-- Estado -->
+                <div class="card status-card">
+                    <h2 class="card-title">Estado de la Evolución</h2>
+                    <div>
+                        <div class="status-item">
+                            <span class="status-label">Generación:</span>
+                            <span id="generation-display" class="generation-value">0</span>
+                        </div>
+                        <div class="status-item">
+                            <span class="status-label">Mejor Distancia:</span>
+                            <span id="distance-display" class="distance-value">N/A</span>
+                        </div>
+                        <div class="route-container">
+                            <span class="status-label">Mejor Ruta:</span>
+                            <span id="route-display" class="route-path">
+                                Añadir más ciudades...
+                            </span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Parámetros -->
+                <div class="card controls-card">
+                    <h2 class="card-title">Parámetros Genéticos</h2>
+
+                    <div class="input-group">
+                        <label for="populationSize" class="input-label">
+                            Tamaño de Población
+                        </label>
+                        <input
+                            type="number"
+                            id="populationSize"
+                            name="populationSize"
+                            value="50"
+                            min="10"
+                            max="500"
+                            class="input-field"
+                        />
+                    </div>
+
+                    <div class="input-group">
+                        <label for="mutationRate" class="input-label">
+                            Tasa de Mutación (0.0 a 1.0)
+                        </label>
+                        <input
+                            type="number"
+                            id="mutationRate"
+                            name="mutationRate"
+                            value="0.05"
+                            step="0.001"
+                            min="0"
+                            max="1"
+                            class="input-field"
+                        />
+                    </div>
+
+                    <div id="error-message" role="alert"></div>
+
+                    <button id="toggle-run-button" class="btn">
+                        Iniciar Evolución Automática
+                    </button>
+
+                    <button id="step-button" class="btn">
+                        Avanzar 1 Generación
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+
+    <script>
+        const API_BASE_URL = "http://127.0.0.1:8000/api/solve";
+
+        const canvas = document.getElementById('tspCanvas');
+        const ctx = canvas.getContext('2d');
+        const overlay = document.getElementById('click-overlay');
+        const toggleButton = document.getElementById('toggle-run-button');
+        const stepButton = document.getElementById('step-button');
+        const resetButton = document.getElementById('reset-button');
+        const populationInput = document.getElementById('populationSize');
+        const mutationInput = document.getElementById('mutationRate');
+        const errorDisplay = document.getElementById('error-message');
+        const cityCountDisplay = document.getElementById('city-count');
+
+        let cities = [];
+        let gaState = {
+            generation: 0,
+            bestRoute: [],
+            bestDistance: 0.0,
+            currentPopulation: []
+        };
+        let isRunning = false;
+        let isLoading = false;
+        let intervalId = null;
+
+        function showError(message) {
+            errorDisplay.textContent = message;
+        }
+
+        function hideError() {
+            errorDisplay.textContent = '';
+        }
+
+        function getParams() {
+            return {
+                populationSize: parseInt(populationInput.value, 10),
+                mutationRate: parseFloat(mutationInput.value),
+            };
+        }
+
+        function drawScene() {
+            const container = canvas.parentElement;
+            const width = container.clientWidth || 600;
+            const height = Math.min(width * 0.6, 500);
+
+            canvas.width = width;
+            canvas.height = height;
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            const canvasWidth = canvas.width;
+            const canvasHeight = canvas.height;
+
+            const scaleX = x => (x / 100) * canvasWidth;
+            const scaleY = y => canvasHeight - ((y / 100) * canvasHeight);
+
+            if (gaState.bestRoute.length > 0) {
+                ctx.strokeStyle = '#000000';
+                ctx.lineWidth = 2;
+                ctx.setLineDash([8, 8]);
+                ctx.lineJoin = 'round';
+                ctx.beginPath();
+
+                const routePoints = [
+                    cities.find(c => c.id === 0),
+                    ...gaState.bestRoute.map(id => cities.find(c => c.id === id)),
+                    cities.find(c => c.id === 0)
+                ].filter(Boolean);
+
+                if (routePoints.length >= 2) {
+                    ctx.moveTo(scaleX(routePoints[0].x), scaleY(routePoints[0].y));
+                    for (let i = 1; i < routePoints.length; i++) {
+                        ctx.lineTo(scaleX(routePoints[i].x), scaleY(routePoints[i].y));
+                    }
+                    ctx.stroke();
+                }
+            }
+
+            cities.forEach((city) => {
+                const x = scaleX(city.x);
+                const y = scaleY(city.y);
+                const isBase = city.id === 0;
+
+                ctx.setLineDash([]);
+                ctx.fillStyle = isBase ? 'red' : 'green';
+
+                ctx.beginPath();
+                ctx.arc(x, y, isBase ? 8 : 7, 0, Math.PI * 2);
+                ctx.fill();
+
+                ctx.strokeStyle = '#000000';
+                ctx.lineWidth = 1;
+                ctx.stroke();
+
+                ctx.fillStyle = '#000000';
+                ctx.font = '12px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.fillText(isBase ? 'BASE' : String(city.id), x, y - 12);
+            });
+        }
+
+        async function runOneGeneration() {
+            if (cities.length < 2) {
+                showError("¡Agregue al menos una ciudad adicional a la Base para comenzar la optimización!");
+                stopEvolution();
+                return;
+            }
+
+            isLoading = true;
+            hideError();
+            stepButton.textContent = 'Calculando...';
+            toggleButton.disabled = true;
+            stepButton.disabled = true;
+
+            const params = getParams();
+
+            const payload = {
+                cities: cities,
+                parameters: {
+                    population_size: params.populationSize,
+                    mutation_rate: params.mutationRate,
+                    generations_per_step: 1
+                },
+                current_population: gaState.currentPopulation,
+                best_route: gaState.bestRoute,
+                best_distance: gaState.bestDistance,
+                generation: gaState.generation
+            };
+
+            try {
+                const maxRetries = 3;
+                let response = null;
+
+                for (let i = 0; i < maxRetries; i++) {
+                    try {
+                        response = await fetch(`${API_BASE_URL}`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        });
+                        if (response.ok) break;
+                    } catch (e) {
+                        console.warn(`Intento ${i + 1} fallido. Reintentando...`);
+                    }
+
+                    if (i < maxRetries - 1) {
+                        const delay = Math.pow(2, i) * 1000;
+                        await new Promise(resolve => setTimeout(resolve, delay));
+                    } else {
+                        throw new Error('Falló la conexión con el servidor después de varios reintentos.');
+                    }
+                }
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.detail || 'Error en la API al ejecutar la evolución.');
+                }
+
+                const data = await response.json();
+
+                gaState = {
+                    generation: data.generation,
+                    bestRoute: data.new_best_route,
+                    bestDistance: data.new_best_distance,
+                    currentPopulation: data.next_population
+                };
+
+                updateUI();
+
+            } catch (err) {
+                console.error('Error de Evolución:', err);
+                showError(err.message || "Ocurrió un error al comunicarse con el backend.");
+                stopEvolution();
+            } finally {
+                isLoading = false;
+                stepButton.textContent = 'Avanzar 1 Generación';
+                toggleButton.disabled = false;
+                if (!isRunning) {
+                    stepButton.disabled = cities.length < 2;
+                }
+            }
+        }
+
+        function initializeApp() {
+            cities = [{ id: 0, x: 10, y: 50 }];
+            cityCountDisplay.textContent = cities.length - 1;
+
+            canvas.addEventListener('click', handleCanvasClick);
+            toggleButton.addEventListener('click', toggleEvolution);
+            stepButton.addEventListener('click', runOneGeneration);
+            resetButton.addEventListener('click', resetApp);
+
+            window.addEventListener('resize', drawScene);
+
+            populationInput.addEventListener('change', resetGaState);
+            mutationInput.addEventListener('change', resetGaState);
+
+            overlay.style.display = 'flex';
+            hideError();
+            updateUI();
+        }
+
+        function updateUI() {
+            document.getElementById('generation-display').textContent = gaState.generation;
+            document.getElementById('distance-display').textContent =
+                gaState.bestDistance > 0 ? gaState.bestDistance.toFixed(2) : 'N/A';
+
+            const routeText = gaState.bestRoute.length > 0
+                ? `0 -> ${gaState.bestRoute.join(' -> ')} -> 0`
+                : 'Añadir más ciudades...';
+
+            document.getElementById('route-display').textContent = routeText;
+
+            //boton
+            if (isRunning) {
+                toggleButton.textContent = 'Detener Evolución';
+                toggleButton.classList.add('running');  
+            } else {
+                toggleButton.textContent = 'Iniciar Evolución Automática';
+                toggleButton.classList.remove('running');
+            }
+           
+
+            const shouldDisableControls = isRunning || isLoading || cities.length < 2;
+            populationInput.disabled = isRunning;
+            mutationInput.disabled = isRunning;
+            stepButton.disabled = shouldDisableControls;
+            resetButton.disabled = isRunning;
+
+            if (cities.length < 2) {
+                overlay.style.display = 'flex';
+            } else {
+                overlay.style.display = 'none';
+            }
+
+            cityCountDisplay.textContent = cities.length - 1;
+            drawScene();
+        }
+
+
+        function handleCanvasClick(event) {
+            if (isRunning || cities.length > 100) return;
+
+            const rect = canvas.getBoundingClientRect();
+
+            const clickX = event.clientX - rect.left;
+            const clickY = event.clientY - rect.top;
+
+            const normalizedX = (clickX / canvas.width) * 100;
+            const normalizedY = ((canvas.height - clickY) / canvas.height) * 100;
+
+            const nextId = cities.length > 0 ? Math.max(...cities.map(c => c.id)) + 1 : 1;
+
+            const newCity = { id: nextId, x: normalizedX, y: normalizedY };
+            cities.push(newCity);
+
+            resetGaState();
+            updateUI();
+        }
+
+        function toggleEvolution() {
+            if (isRunning) {
+                stopEvolution();
+            } else {
+                startEvolution();
+            }
+            updateUI();
+        }
+
+        function startEvolution() {
+            if (cities.length < 2) {
+                showError("¡Agregue al menos una ciudad adicional a la Base para comenzar!");
+                return;
+            }
+            if (intervalId) clearInterval(intervalId);
+
+            isRunning = true;
+            intervalId = setInterval(runOneGeneration, 150);
+            hideError();
+        }
+
+        function stopEvolution() {
+            if (intervalId) {
+                clearInterval(intervalId);
+                intervalId = null;
+            }
+            isRunning = false;
+        }
+
+        function resetGaState() {
+            gaState = { generation: 0, bestRoute: [], bestDistance: 0.0, currentPopulation: [] };
+            stopEvolution();
+            hideError();
+            updateUI();
+        }
+
+        function resetApp() {
+            stopEvolution();
+            cities = [];
+            resetGaState();
+            initializeApp();
+        }
+
+        initializeApp();
+    </script>
+</body>
+</html>
