@@ -105,7 +105,8 @@
 
 
     <script>
-        const API_BASE_URL = "http://127.0.0.1:8000/api/solve";
+        const API_BASE_URL = "/api/solve";
+
 
         const canvas = document.getElementById('tspCanvas');
         const ctx = canvas.getContext('2d');
@@ -239,7 +240,7 @@
 
                 for (let i = 0; i < maxRetries; i++) {
                     try {
-                        response = await fetch(`${API_BASE_URL}`, {
+                        response = await fetch(API_BASE_URL, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify(payload)
